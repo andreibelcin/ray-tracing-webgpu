@@ -9,6 +9,6 @@ fn main(
     @builtin(global_invocation_id)
     id: vec3u,
 ) {
-    let color = vec4f(vec2f(id.xy) / resolution, 0.0, 1.0);
+    let color = vec4f(vec2f(id.xy) / resolution, 1.0 - f32(id.x) / resolution.x, 1.0);
     textureStore(output_tex, id.xy, color);
 }

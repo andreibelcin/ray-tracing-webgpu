@@ -1,19 +1,17 @@
 use std::sync::Arc;
 
 use camera::Camera;
-use util::{Point3, Vec3};
+use util::{
+    build_compute_pipeline, build_render_pipeline, build_texture, ComputeBindGroupBuilder, Point3,
+    RenderBindGroupBuilder, Vec3,
+};
 use wgpu::{
-    include_wgsl,
     util::{BufferInitDescriptor, DeviceExt},
-    BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindGroupLayoutDescriptor,
-    BindGroupLayoutEntry, BlendState, Buffer, BufferBinding, BufferUsages, Color, ColorTargetState,
-    ColorWrites, CommandEncoderDescriptor, ComputePassDescriptor, ComputePipeline,
-    ComputePipelineDescriptor, Device, DeviceDescriptor, Extent3d, Instance, InstanceDescriptor,
-    MultisampleState, Operations, PipelineCompilationOptions, PipelineLayoutDescriptor,
-    PrimitiveState, Queue, RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline,
-    RenderPipelineDescriptor, RequestAdapterOptions, Sampler, SamplerDescriptor, ShaderModule,
-    ShaderStages, Surface, SurfaceConfiguration, SurfaceError, Texture, TextureDescriptor,
-    TextureFormat, TextureUsages, TextureViewDescriptor,
+    BindGroup, Buffer, BufferUsages, Color, CommandEncoderDescriptor, ComputePassDescriptor,
+    ComputePipeline, Device, DeviceDescriptor, Instance, InstanceDescriptor, Operations, Queue,
+    RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline, RequestAdapterOptions,
+    Sampler, SamplerDescriptor, Surface, SurfaceConfiguration, SurfaceError, TextureUsages,
+    TextureViewDescriptor,
 };
 use winit::{
     application::ApplicationHandler,
@@ -89,11 +87,11 @@ struct App<'a> {
 
     compute_pipeline: ComputePipeline,
     compute_bind_group: BindGroup,
-    compute_bind_group_layout: BindGroupLayout,
+    compute_bind_group_builder: ComputeBindGroupBuilder,
 
     render_pipeline: RenderPipeline,
     render_bind_group: BindGroup,
-    render_bind_group_layout: BindGroupLayout,
+    render_bind_group_builder: RenderBindGroupBuilder,
 
     resolution_uniform: Buffer,
     sampler: Sampler,
@@ -116,188 +114,41 @@ impl<'a> App<'a> {
                     contents: bytemuck::cast_slice(&[size.width as f32, size.height as f32]),
                     usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
                 });
-
-        let compute_texture = webgpu_resources.device.create_texture(&TextureDescriptor {
-            size: Extent3d {
-                width: size.width,
-                height: size.height,
-                depth_or_array_layers: 1,
-            },
-            format: TextureFormat::Rgba8Unorm,
-            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING,
-            label: None,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            view_formats: &[TextureFormat::Rgba8Unorm],
-        });
-
-        let compute_bind_group_layout =
-            webgpu_resources
-                .device
-                .create_bind_group_layout(&BindGroupLayoutDescriptor {
-                    label: None,
-                    entries: &[
-                        BindGroupLayoutEntry {
-                            binding: 0,
-                            visibility: ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::StorageTexture {
-                                view_dimension: wgpu::TextureViewDimension::D2,
-                                access: wgpu::StorageTextureAccess::WriteOnly,
-                                format: TextureFormat::Rgba8Unorm,
-                            },
-                            count: None,
-                        },
-                        BindGroupLayoutEntry {
-                            binding: 1,
-                            visibility: ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Uniform,
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                    ],
-                });
-        let compute_bind_group = webgpu_resources
-            .device
-            .create_bind_group(&BindGroupDescriptor {
-                label: None,
-                layout: &compute_bind_group_layout,
-                entries: &[
-                    BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(
-                            &compute_texture.create_view(&TextureViewDescriptor::default()),
-                        ),
-                    },
-                    BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Buffer(
-                            resolution_uniform.as_entire_buffer_binding(),
-                        ),
-                    },
-                ],
-            });
-
-        let compute_shader = webgpu_resources
-            .device
-            .create_shader_module(include_wgsl!("compute.wgsl"));
-        let compute_pipeline_layout =
-            webgpu_resources
-                .device
-                .create_pipeline_layout(&PipelineLayoutDescriptor {
-                    label: None,
-                    bind_group_layouts: &[&compute_bind_group_layout],
-                    push_constant_ranges: &[],
-                });
-        let compute_pipeline =
-            webgpu_resources
-                .device
-                .create_compute_pipeline(&ComputePipelineDescriptor {
-                    module: &compute_shader,
-                    entry_point: "main",
-                    compilation_options: PipelineCompilationOptions::default(),
-                    label: None,
-                    layout: Some(&compute_pipeline_layout),
-                });
-
+        let compute_texture = build_texture(&webgpu_resources.device, size);
         let sampler = webgpu_resources
             .device
             .create_sampler(&SamplerDescriptor::default());
-        let render_bind_group_layout =
-            webgpu_resources
-                .device
-                .create_bind_group_layout(&BindGroupLayoutDescriptor {
-                    label: None,
-                    entries: &[
-                        BindGroupLayoutEntry {
-                            binding: 0,
-                            visibility: ShaderStages::FRAGMENT,
-                            ty: wgpu::BindingType::Texture {
-                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                                view_dimension: wgpu::TextureViewDimension::D2,
-                                multisampled: false,
-                            },
-                            count: None,
-                        },
-                        BindGroupLayoutEntry {
-                            binding: 1,
-                            visibility: ShaderStages::FRAGMENT,
-                            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                            count: None,
-                        },
-                    ],
-                });
-        let render_bind_group = webgpu_resources
-            .device
-            .create_bind_group(&BindGroupDescriptor {
-                label: None,
-                layout: &render_bind_group_layout,
-                entries: &[
-                    BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(
-                            &compute_texture.create_view(&TextureViewDescriptor::default()),
-                        ),
-                    },
-                    BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&sampler),
-                    },
-                ],
-            });
 
-        let render_shader = webgpu_resources
-            .device
-            .create_shader_module(include_wgsl!("shader.wgsl"));
-        let render_pipeline_layout =
-            webgpu_resources
-                .device
-                .create_pipeline_layout(&PipelineLayoutDescriptor {
-                    label: None,
-                    bind_group_layouts: &[&render_bind_group_layout],
-                    push_constant_ranges: &[],
-                });
-        let render_pipeline =
-            webgpu_resources
-                .device
-                .create_render_pipeline(&RenderPipelineDescriptor {
-                    label: None,
-                    layout: Some(&render_pipeline_layout),
-                    vertex: wgpu::VertexState {
-                        module: &render_shader,
-                        entry_point: "vert_main",
-                        compilation_options: PipelineCompilationOptions::default(),
-                        buffers: &[],
-                    },
-                    fragment: Some(wgpu::FragmentState {
-                        module: &render_shader,
-                        entry_point: "frag_main",
-                        compilation_options: PipelineCompilationOptions::default(),
-                        targets: &[Some(ColorTargetState {
-                            format: webgpu_resources.surface_config.format,
-                            blend: Some(BlendState::REPLACE),
-                            write_mask: ColorWrites::all(),
-                        })],
-                    }),
-                    primitive: PrimitiveState::default(),
-                    depth_stencil: None,
-                    multisample: MultisampleState::default(),
-                    multiview: None,
-                });
+        let compute_bind_group_builder = ComputeBindGroupBuilder::new(&webgpu_resources.device);
+        let compute_bind_group = compute_bind_group_builder.build(
+            &webgpu_resources.device,
+            &compute_texture,
+            &resolution_uniform,
+        );
+
+        let compute_pipeline =
+            build_compute_pipeline(&webgpu_resources.device, &compute_bind_group_builder);
+
+        let render_bind_group_builder = RenderBindGroupBuilder::new(&webgpu_resources.device);
+        let render_bind_group =
+            render_bind_group_builder.build(&webgpu_resources.device, &compute_texture, &sampler);
+
+        let render_pipeline = build_render_pipeline(
+            &webgpu_resources.device,
+            &render_bind_group_builder,
+            webgpu_resources.surface_config.format,
+        );
 
         Self {
             window,
             size,
             webgpu_resources,
             compute_bind_group,
-            compute_bind_group_layout,
+            compute_bind_group_builder,
             compute_pipeline,
             render_pipeline,
             render_bind_group,
-            render_bind_group_layout,
+            render_bind_group_builder,
             resolution_uniform,
             sampler,
             scene: Scene {
@@ -313,70 +164,23 @@ impl<'a> App<'a> {
         self.size = new_size;
         self.webgpu_resources.resize_surface(new_size);
 
-        let compute_texture = self
-            .webgpu_resources
-            .device
-            .create_texture(&TextureDescriptor {
-                size: Extent3d {
-                    width: self.size.width,
-                    height: self.size.height,
-                    depth_or_array_layers: 1,
-                },
-                format: TextureFormat::Rgba8Unorm,
-                usage: TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING,
-                label: None,
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                view_formats: &[TextureFormat::Rgba8Unorm],
-            });
-
+        let compute_texture = build_texture(&self.webgpu_resources.device, self.size);
         self.webgpu_resources.queue.write_buffer(
             &self.resolution_uniform,
             0,
             bytemuck::cast_slice(&[self.size.width as f32, self.size.height as f32]),
         );
 
-        self.compute_bind_group =
-            self.webgpu_resources
-                .device
-                .create_bind_group(&BindGroupDescriptor {
-                    label: None,
-                    layout: &self.compute_bind_group_layout,
-                    entries: &[
-                        BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(
-                                &compute_texture.create_view(&TextureViewDescriptor::default()),
-                            ),
-                        },
-                        BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::Buffer(
-                                self.resolution_uniform.as_entire_buffer_binding(),
-                            ),
-                        },
-                    ],
-                });
-        self.render_bind_group =
-            self.webgpu_resources
-                .device
-                .create_bind_group(&BindGroupDescriptor {
-                    label: None,
-                    layout: &self.render_bind_group_layout,
-                    entries: &[
-                        BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(
-                                &compute_texture.create_view(&TextureViewDescriptor::default()),
-                            ),
-                        },
-                        BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::Sampler(&self.sampler),
-                        },
-                    ],
-                })
+        self.compute_bind_group = self.compute_bind_group_builder.build(
+            &self.webgpu_resources.device,
+            &compute_texture,
+            &self.resolution_uniform,
+        );
+        self.render_bind_group = self.render_bind_group_builder.build(
+            &self.webgpu_resources.device,
+            &compute_texture,
+            &self.sampler,
+        );
     }
 
     fn update(&mut self) {}
