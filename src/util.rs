@@ -1,29 +1,18 @@
-use std::ops::Neg;
+use std::ops::{Add, Div, Neg, Sub};
 
 use wgpu::{
     include_wgsl, BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout,
-    BindGroupLayoutDescriptor, BindGroupLayoutEntry, BlendState, Buffer, ColorTargetState,
-    ColorWrites, ComputePipeline, ComputePipelineDescriptor, Device, Extent3d, MultisampleState,
-    PipelineCompilationOptions, PipelineLayoutDescriptor, PrimitiveState, RenderPipeline,
-    RenderPipelineDescriptor, Sampler, ShaderStages, Texture, TextureDescriptor, TextureFormat,
-    TextureUsages, TextureViewDescriptor,
+    BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingResource, BindingType, BlendState, ColorTargetState, ColorWrites, ComputePipeline, ComputePipelineDescriptor, Device,
+    Extent3d, MultisampleState, PipelineCompilationOptions, PipelineLayoutDescriptor,
+    PrimitiveState, RenderPipeline, RenderPipelineDescriptor, Sampler, SamplerBindingType,
+    ShaderStages, StorageTextureAccess, Texture, TextureDescriptor, TextureFormat, TextureUsages,
+    TextureViewDescriptor, TextureViewDimension,
 };
 use winit::dpi::PhysicalSize;
 
-#[derive(Default)]
-pub struct Point3 {
-    pub x: f32,
-    pub y: f32,
-    pub z: f32,
-}
+use crate::camera::Camera;
 
-impl Point3 {
-    pub fn origin() -> Self {
-        Self::default()
-    }
-}
-
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub struct Vec3(pub f32, pub f32, pub f32);
 
 impl Vec3 {
@@ -36,6 +25,30 @@ impl Vec3 {
     pub fn k() -> Self {
         Vec3(0.0, 0.0, 1.0)
     }
+
+    pub fn origin() -> Self {
+        Vec3(0.0, 0.0, 0.0)
+    }
+
+    pub fn as_array(&self) -> [f32; 3] {
+        [self.0, self.1, self.2]
+    }
+}
+
+impl Add for Vec3 {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self(self.0 + rhs.0, self.1 + rhs.1, self.2 + rhs.2)
+    }
+}
+
+impl Sub for Vec3 {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self(self.0 - rhs.0, self.1 - rhs.1, self.2 - rhs.2)
+    }
 }
 
 impl Neg for Vec3 {
@@ -43,6 +56,14 @@ impl Neg for Vec3 {
 
     fn neg(self) -> Self::Output {
         Self(-self.0, -self.1, -self.2)
+    }
+}
+
+impl Div<f32> for Vec3 {
+    type Output = Self;
+
+    fn div(self, rhs: f32) -> Self::Output {
+        Self(self.0 / rhs, self.1 / rhs, self.2 / rhs)
     }
 }
 
@@ -63,73 +84,86 @@ pub fn build_texture(device: &Device, size: PhysicalSize<u32>) -> Texture {
     })
 }
 
-pub struct ComputeBindGroupBuilder(BindGroupLayout);
-impl ComputeBindGroupBuilder {
-    pub fn new(device: &Device) -> Self {
-        let compute_bind_group_layout =
-            device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-                label: None,
-                entries: &[
-                    BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::StorageTexture {
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            access: wgpu::StorageTextureAccess::WriteOnly,
-                            format: TextureFormat::Rgba8Unorm,
-                        },
-                        count: None,
+pub fn texture_bind_group_layouts(device: &Device) -> [BindGroupLayout; 2] {
+    [
+        device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[BindGroupLayoutEntry {
+                binding: 0,
+                visibility: ShaderStages::COMPUTE,
+                ty: BindingType::StorageTexture {
+                    view_dimension: TextureViewDimension::D2,
+                    access: StorageTextureAccess::WriteOnly,
+                    format: TextureFormat::Rgba8Unorm,
+                },
+                count: None,
+            }],
+        }),
+        device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
                     },
-                    BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                ],
-            });
-        Self(compute_bind_group_layout)
-    }
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        }),
+    ]
+}
 
-    pub fn build(
-        &self,
-        device: &Device,
-        compute_texture: &Texture,
-        resolution_uniform: &Buffer,
-    ) -> BindGroup {
+pub fn texture_bind_groups(
+    device: &Device,
+    texture: &Texture,
+    sampler: &Sampler,
+) -> [BindGroup; 2] {
+    let view = texture.create_view(&TextureViewDescriptor::default());
+    let layouts = texture_bind_group_layouts(device);
+    [
         device.create_bind_group(&BindGroupDescriptor {
             label: None,
-            layout: &self.0,
+            layout: &layouts[0],
+            entries: &[BindGroupEntry {
+                binding: 0,
+                resource: BindingResource::TextureView(&view),
+            }],
+        }),
+        device.create_bind_group(&BindGroupDescriptor {
+            label: None,
+            layout: &layouts[1],
             entries: &[
                 BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(
-                        &compute_texture.create_view(&TextureViewDescriptor::default()),
-                    ),
+                    resource: BindingResource::TextureView(&view),
                 },
                 BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Buffer(
-                        resolution_uniform.as_entire_buffer_binding(),
-                    ),
+                    resource: BindingResource::Sampler(sampler),
                 },
             ],
-        })
-    }
+        }),
+    ]
 }
 
-pub fn build_compute_pipeline(
-    device: &Device,
-    compute_bind_group_builder: &ComputeBindGroupBuilder,
-) -> ComputePipeline {
+pub fn build_compute_pipeline(device: &Device) -> ComputePipeline {
     let compute_shader = device.create_shader_module(include_wgsl!("compute.wgsl"));
     let compute_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
         label: None,
-        bind_group_layouts: &[&compute_bind_group_builder.0],
+        bind_group_layouts: &[
+            &texture_bind_group_layouts(device)[0],
+            &Camera::bind_group_layout(device),
+        ],
         push_constant_ranges: &[],
     });
     device.create_compute_pipeline(&ComputePipelineDescriptor {
@@ -141,63 +175,14 @@ pub fn build_compute_pipeline(
     })
 }
 
-pub struct RenderBindGroupBuilder(BindGroupLayout);
-impl RenderBindGroupBuilder {
-    pub fn new(device: &Device) -> Self {
-        let render_bind_group_layout =
-            device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-                label: None,
-                entries: &[
-                    BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                    BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                ],
-            });
-        Self(render_bind_group_layout)
-    }
-
-    pub fn build(&self, device: &Device, texture: &Texture, sampler: &Sampler) -> BindGroup {
-        device.create_bind_group(&BindGroupDescriptor {
-            label: None,
-            layout: &self.0,
-            entries: &[
-                BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(
-                        &texture.create_view(&TextureViewDescriptor::default()),
-                    ),
-                },
-                BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(sampler),
-                },
-            ],
-        })
-    }
-}
-
 pub fn build_render_pipeline(
     device: &Device,
-    render_bind_group_builder: &RenderBindGroupBuilder,
     fragment_target_format: TextureFormat,
 ) -> RenderPipeline {
     let render_shader = device.create_shader_module(include_wgsl!("shader.wgsl"));
     let render_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
         label: None,
-        bind_group_layouts: &[&render_bind_group_builder.0],
+        bind_group_layouts: &[&texture_bind_group_layouts(device)[1]],
         push_constant_ranges: &[],
     });
     device.create_render_pipeline(&RenderPipelineDescriptor {

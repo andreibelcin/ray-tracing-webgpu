@@ -1,13 +1,9 @@
 use std::sync::Arc;
 
 use camera::Camera;
-use util::{
-    build_compute_pipeline, build_render_pipeline, build_texture, ComputeBindGroupBuilder, Point3,
-    RenderBindGroupBuilder, Vec3,
-};
+use util::{build_compute_pipeline, build_render_pipeline, build_texture, texture_bind_groups};
 use wgpu::{
-    util::{BufferInitDescriptor, DeviceExt},
-    BindGroup, Buffer, BufferUsages, Color, CommandEncoderDescriptor, ComputePassDescriptor,
+    BindGroup, Color, CommandEncoderDescriptor, ComputePassDescriptor,
     ComputePipeline, Device, DeviceDescriptor, Instance, InstanceDescriptor, Operations, Queue,
     RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline, RequestAdapterOptions,
     Sampler, SamplerDescriptor, Surface, SurfaceConfiguration, SurfaceError, TextureUsages,
@@ -86,15 +82,12 @@ struct App<'a> {
     webgpu_resources: WebGPUResources<'a>,
 
     compute_pipeline: ComputePipeline,
-    compute_bind_group: BindGroup,
-    compute_bind_group_builder: ComputeBindGroupBuilder,
-
     render_pipeline: RenderPipeline,
-    render_bind_group: BindGroup,
-    render_bind_group_builder: RenderBindGroupBuilder,
 
-    resolution_uniform: Buffer,
     sampler: Sampler,
+    compute_texture_bind_group: BindGroup,
+    render_texture_bind_group: BindGroup,
+    camera_bind_group: BindGroup,
 
     scene: Scene,
 }
@@ -106,36 +99,20 @@ impl<'a> App<'a> {
 
         let webgpu_resources = WebGPUResources::new(window.clone());
 
-        let resolution_uniform =
-            webgpu_resources
-                .device
-                .create_buffer_init(&BufferInitDescriptor {
-                    label: None,
-                    contents: bytemuck::cast_slice(&[size.width as f32, size.height as f32]),
-                    usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-                });
-        let compute_texture = build_texture(&webgpu_resources.device, size);
         let sampler = webgpu_resources
             .device
             .create_sampler(&SamplerDescriptor::default());
+        let compute_texture = build_texture(&webgpu_resources.device, size);
 
-        let compute_bind_group_builder = ComputeBindGroupBuilder::new(&webgpu_resources.device);
-        let compute_bind_group = compute_bind_group_builder.build(
-            &webgpu_resources.device,
-            &compute_texture,
-            &resolution_uniform,
-        );
+        let [compute_texture_bind_group, render_texture_bind_group] =
+            texture_bind_groups(&webgpu_resources.device, &compute_texture, &sampler);
 
-        let compute_pipeline =
-            build_compute_pipeline(&webgpu_resources.device, &compute_bind_group_builder);
+        let camera = Camera::new(size, &webgpu_resources.device);
+        let camera_bind_group = camera.bind_group(&webgpu_resources.device);
 
-        let render_bind_group_builder = RenderBindGroupBuilder::new(&webgpu_resources.device);
-        let render_bind_group =
-            render_bind_group_builder.build(&webgpu_resources.device, &compute_texture, &sampler);
-
+        let compute_pipeline = build_compute_pipeline(&webgpu_resources.device);
         let render_pipeline = build_render_pipeline(
             &webgpu_resources.device,
-            &render_bind_group_builder,
             webgpu_resources.surface_config.format,
         );
 
@@ -143,20 +120,13 @@ impl<'a> App<'a> {
             window,
             size,
             webgpu_resources,
-            compute_bind_group,
-            compute_bind_group_builder,
             compute_pipeline,
             render_pipeline,
-            render_bind_group,
-            render_bind_group_builder,
-            resolution_uniform,
             sampler,
-            scene: Scene {
-                camera: Camera {
-                    origin: Point3::origin(),
-                    direction: -Vec3::k(),
-                },
-            },
+            compute_texture_bind_group,
+            render_texture_bind_group,
+            camera_bind_group,
+            scene: Scene { camera },
         }
     }
 
@@ -165,22 +135,17 @@ impl<'a> App<'a> {
         self.webgpu_resources.resize_surface(new_size);
 
         let compute_texture = build_texture(&self.webgpu_resources.device, self.size);
-        self.webgpu_resources.queue.write_buffer(
-            &self.resolution_uniform,
-            0,
-            bytemuck::cast_slice(&[self.size.width as f32, self.size.height as f32]),
-        );
-
-        self.compute_bind_group = self.compute_bind_group_builder.build(
-            &self.webgpu_resources.device,
-            &compute_texture,
-            &self.resolution_uniform,
-        );
-        self.render_bind_group = self.render_bind_group_builder.build(
+        let [compute_texture_bind_group, render_texture_bind_group] = texture_bind_groups(
             &self.webgpu_resources.device,
             &compute_texture,
             &self.sampler,
         );
+        self.compute_texture_bind_group = compute_texture_bind_group;
+        self.render_texture_bind_group = render_texture_bind_group;
+
+        self.scene
+            .camera
+            .resize_viewport(&self.webgpu_resources.queue, self.size);
     }
 
     fn update(&mut self) {}
@@ -199,7 +164,8 @@ impl<'a> App<'a> {
         {
             let mut compute_pass = encoder.begin_compute_pass(&ComputePassDescriptor::default());
             compute_pass.set_pipeline(&self.compute_pipeline);
-            compute_pass.set_bind_group(0, &self.compute_bind_group, &[]);
+            compute_pass.set_bind_group(0, &self.compute_texture_bind_group, &[]);
+            compute_pass.set_bind_group(1, &self.camera_bind_group, &[]);
             compute_pass.dispatch_workgroups(self.size.width, self.size.height, 1);
         }
 
@@ -216,7 +182,7 @@ impl<'a> App<'a> {
                 ..Default::default()
             });
             render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.set_bind_group(0, &self.render_bind_group, &[]);
+            render_pass.set_bind_group(0, &self.render_texture_bind_group, &[]);
             render_pass.draw(0..6, 0..1);
         }
 
