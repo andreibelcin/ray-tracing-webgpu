@@ -1,0 +1,1 @@
+This is an implementation of [Ray Tracing in One Weekend](https://raytracing.github.io/books/RayTracingInOneWeekend.html) using Rust and WebGPU compute shaders. Yes, it has taken me more than one weekend ¯\\\_(ツ)\_/¯
