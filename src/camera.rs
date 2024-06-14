@@ -1,8 +1,10 @@
+use std::fmt::Debug;
+
 use wgpu::{
     util::{BufferInitDescriptor, DeviceExt},
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindGroupLayoutDescriptor,
-    BindGroupLayoutEntry, BindingResource, BindingType, Buffer, BufferBindingType,
-    BufferUsages, Device, Queue, ShaderStages,
+    BindGroupLayoutEntry, BindingResource, BindingType, Buffer, BufferBindingType, BufferUsages,
+    Device, Queue, ShaderStages,
 };
 use winit::dpi::PhysicalSize;
 
@@ -41,8 +43,8 @@ impl Camera {
         ];
 
         let upper_corner =
-            origin - Vec3(0.0, 0.0, viewport.focal_len) - (viewport.u / 2.0) - (viewport.v / 2.0);
-        let pixel_00_center = upper_corner + (viewport.du + viewport.dv) / 2.0;
+            origin - Vec3(0.0, 0.0, viewport.focal_len) - (viewport.u * 0.5) - (viewport.v * 0.5);
+        let pixel_00_center = upper_corner + (viewport.du + viewport.dv) * 0.5;
         let pixel_buffer = device.create_buffer_init(&BufferInitDescriptor {
             label: None,
             contents: bytemuck::cast_slice(&pixel_00_center.as_array()),
@@ -157,9 +159,9 @@ impl Camera {
     fn update_pixel_buffer(&mut self, queue: &Queue) {
         let upper_corner = self.origin
             - Vec3(0.0, 0.0, self.viewport.focal_len)
-            - (self.viewport.u / 2.0)
-            - (self.viewport.v / 2.0);
-        self.pixel_00_center = upper_corner + (self.viewport.du + self.viewport.dv) / 2.0;
+            - (self.viewport.u * 0.5)
+            - (self.viewport.v * 0.5);
+        self.pixel_00_center = upper_corner + (self.viewport.du + self.viewport.dv) * 0.5;
         queue.write_buffer(
             &self.pixel_buffer,
             0,
@@ -168,6 +170,17 @@ impl Camera {
     }
 }
 
+impl Debug for Camera {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Camera")
+            .field("origin", &self.origin)
+            .field("viewport", &self.viewport)
+            .field("first pixel center", &self.pixel_00_center)
+            .finish()
+    }
+}
+
+#[derive(Debug)]
 pub struct Viewport {
     width: f32,
     height: f32,
@@ -186,8 +199,8 @@ impl Viewport {
         let u = Vec3(width, 0.0, 0.0);
         let v = Vec3(0.0, -height, 0.0);
 
-        let du = u / image_size.width as _;
-        let dv = v / image_size.height as _;
+        let du = u / image_size.width as f32;
+        let dv = v / image_size.height as f32;
 
         Self {
             height,
@@ -209,7 +222,7 @@ impl Viewport {
         self.width = self.height * (size.width as f32 / size.height as f32);
         self.u = Vec3(self.width, 0.0, 0.0);
 
-        self.du = self.u / size.width as _;
-        self.dv = self.v / size.height as _;
+        self.du = self.u / size.width as f32;
+        self.dv = self.v / size.height as f32;
     }
 }

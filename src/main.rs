@@ -1,13 +1,20 @@
-use std::sync::Arc;
+use std::{
+    cell::RefCell,
+    sync::{Arc, OnceLock},
+};
 
 use camera::Camera;
-use util::{build_compute_pipeline, build_render_pipeline, build_texture, texture_bind_groups};
+use geometry::Geometry;
+use util::{
+    build_compute_pipeline, build_render_pipeline, build_texture, texture_bind_group_layouts,
+    texture_bind_groups,
+};
 use wgpu::{
-    BindGroup, Color, CommandEncoderDescriptor, ComputePassDescriptor,
+    BindGroup, BindGroupLayout, Color, CommandEncoderDescriptor, ComputePassDescriptor,
     ComputePipeline, Device, DeviceDescriptor, Instance, InstanceDescriptor, Operations, Queue,
     RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline, RequestAdapterOptions,
-    Sampler, SamplerDescriptor, Surface, SurfaceConfiguration, SurfaceError, TextureUsages,
-    TextureViewDescriptor,
+    Sampler, SamplerDescriptor, Surface, SurfaceConfiguration, SurfaceError, Texture,
+    TextureFormat, TextureUsages, TextureViewDescriptor,
 };
 use winit::{
     application::ApplicationHandler,
@@ -17,8 +24,17 @@ use winit::{
     window::{Window, WindowAttributes, WindowId},
 };
 
+use crate::util::build_debug_texture;
+
 mod camera;
+mod geometry;
 mod util;
+
+static DEBUG_TEXTURE: OnceLock<Texture> = OnceLock::new();
+fn init_debug_texture(device: &Device, queue: &Queue) {
+    #[cfg(feature = "debug-texture")]
+    let _ = DEBUG_TEXTURE.set(build_debug_texture(device, queue));
+}
 
 struct WebGPUResources<'a> {
     surface: Surface<'a>,
@@ -74,6 +90,7 @@ impl<'a> WebGPUResources<'a> {
 
 struct Scene {
     camera: Camera,
+    objects: Vec<Box<dyn Geometry>>,
 }
 
 struct App<'a> {
@@ -85,6 +102,7 @@ struct App<'a> {
     render_pipeline: RenderPipeline,
 
     sampler: Sampler,
+    texture_bind_group_layouts: [BindGroupLayout; 2],
     compute_texture_bind_group: BindGroup,
     render_texture_bind_group: BindGroup,
     camera_bind_group: BindGroup,
@@ -99,22 +117,36 @@ impl<'a> App<'a> {
 
         let webgpu_resources = WebGPUResources::new(window.clone());
 
+        init_debug_texture(&webgpu_resources.device, &webgpu_resources.queue);
         let sampler = webgpu_resources
             .device
             .create_sampler(&SamplerDescriptor::default());
         let compute_texture = build_texture(&webgpu_resources.device, size);
 
-        let [compute_texture_bind_group, render_texture_bind_group] =
-            texture_bind_groups(&webgpu_resources.device, &compute_texture, &sampler);
+        let texture_bind_group_layouts = texture_bind_group_layouts(&webgpu_resources.device);
+        let [compute_texture_bind_group, render_texture_bind_group] = texture_bind_groups(
+            &webgpu_resources.device,
+            &compute_texture,
+            &texture_bind_group_layouts,
+            &sampler,
+            DEBUG_TEXTURE.get(),
+        );
 
         let camera = Camera::new(size, &webgpu_resources.device);
         let camera_bind_group = camera.bind_group(&webgpu_resources.device);
 
-        let compute_pipeline = build_compute_pipeline(&webgpu_resources.device);
+        let compute_pipeline = build_compute_pipeline(
+            &webgpu_resources.device,
+            &texture_bind_group_layouts[0],
+            &Camera::bind_group_layout(&webgpu_resources.device),
+        );
         let render_pipeline = build_render_pipeline(
             &webgpu_resources.device,
+            &texture_bind_group_layouts[1],
             webgpu_resources.surface_config.format,
         );
+
+        println!("{:?}", camera);
 
         Self {
             window,
@@ -123,10 +155,14 @@ impl<'a> App<'a> {
             compute_pipeline,
             render_pipeline,
             sampler,
+            texture_bind_group_layouts,
             compute_texture_bind_group,
             render_texture_bind_group,
             camera_bind_group,
-            scene: Scene { camera },
+            scene: Scene {
+                camera,
+                objects: vec![],
+            },
         }
     }
 
@@ -138,7 +174,9 @@ impl<'a> App<'a> {
         let [compute_texture_bind_group, render_texture_bind_group] = texture_bind_groups(
             &self.webgpu_resources.device,
             &compute_texture,
+            &self.texture_bind_group_layouts,
             &self.sampler,
+            DEBUG_TEXTURE.get(),
         );
         self.compute_texture_bind_group = compute_texture_bind_group;
         self.render_texture_bind_group = render_texture_bind_group;

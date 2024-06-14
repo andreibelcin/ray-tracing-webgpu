@@ -15,21 +15,21 @@ fn vert_main(
 ) -> VertexOut {
     var positions = array(
         // 1st triangle
-        vec2f( -1.0,  -1.0),  // center
-        vec2f( 1.0,  -1.0),  // right, center
-        vec2f( -1.0,  1.0),  // center, top
+        vec2f(1.0, 1.0), 
+        vec2f(1.0, -1.0),
+        vec2f(-1.0, -1.0),
 
         // 2st triangle
-        vec2f( -1.0,  1.0),  // center, top
-        vec2f( 1.0,  -1.0),  // right, center
-        vec2f( 1.0,  1.0),  // right, top
+        vec2f(-1.0, -1.0),
+        vec2f(-1.0, 1.0),
+        vec2f(1.0, 1.0),
     );
 
     let pos = positions[i];
     
     var out: VertexOut;
     out.pos = vec4f(pos, 0.0, 1.0);
-    out.tex_coord = vec2f(pos.x, 1.0 - pos.y);
+    out.tex_coord = vec2f((pos.x + 1.0) * 0.5, (1.0 - pos.y) * 0.5);
     return out;
 }
 
